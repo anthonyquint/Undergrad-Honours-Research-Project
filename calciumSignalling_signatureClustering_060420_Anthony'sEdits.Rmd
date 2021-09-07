@@ -1,0 +1,521 @@
+---
+title: "calciumSignalling_signatureClustering"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#block 1 
+```
+
+```{r}
+#block 2 
+# clear global enviroment                          
+rm(list = ls())
+
+#install.packages("devtools")
+
+
+library(dtw)
+library(dplyr)
+library(ggplot2)
+library(proxy)
+
+#devtools::install_github(repo = "NMikolajewicz/scMiko",ref = "master",auth_token = "a3c1c9b15c496991c952d1fe3ccc52db770f22fa",force = TRUE)
+
+library(scMiko)
+
+
+```
+
+```{r}
+#Block 3 
+#dir <- "D:/Users/Nick/Dropbox/PhD Projects - SVK/Papers/P2 receptor modeling - Anmar/R analysis/inputData/"
+#file <- "input_master_v2.xlsx"
+
+file <- "/Users/anthonyquint/Desktop/R analysis/inputData/input_master_v2.xlsx"
+
+```
+
+
+```{r import data, warning = F, message=F}
+#Block 4 
+#sheetNames <- openxlsx::getSheetNames(getLoadPath(file, dir))
+sheetNames <- openxlsx::getSheetNames(file)
+
+geneSets <- list()
+
+
+for (i in 1:length(sheetNames)){
+  current.sheet <-  sheetNames[i]
+  gene.set <- readxl::read_excel(file, sheet = current.sheet)
+  
+  gene.set <- gene.set[complete.cases(gene.set), ]
+  
+  geneSets[[current.sheet]] <- gene.set 
+}
+
+```
+
+
+```{r}
+
+#Block 5 
+# distMatrix <- dist(sample2, method=”DTW”)
+
+plt.match <- F
+
+if (plt.match){
+  
+  ts <-  geneSets[[5]]
+
+time.vec <- as.vector((unlist(ts %>% dplyr::select(c("Time")))))
+
+ts <- ts %>% dplyr::select(-c("Time"))
+
+colnames(ts) <- paste("ROI", seq(1, ncol(ts)), sep = "")
+
+i <- 1?
+# j <- 3
+
+# for (i in 1:ncol(ts)){
+  for (j in 1:ncol(ts)){
+    query <- as.vector(unlist(ts[, i]))
+    reference <- as.vector(unlist(ts[, j]))
+    alignment<-dtw(query,reference);
+
+    # plot(alignment$index1,alignment$index2,main="Warping function");
+
+
+    df.input <- data.frame(t = time.vec,
+                           query = query,
+                           ref = reference)
+
+    loessMod10 <- loess(query ~ t, data=df.input, span=0.1) # 10% smoothing span
+    #loessMod10 <- loess(query ~ t, data=df.input, span=0.03) # 5% smoothing span(Anthony's Edit)
+
+    df.input$q.smooth <- predict(loessMod10)
+
+
+    df.warped <- data.frame(t = time.vec[alignment$index1],
+                            query = query[alignment$index1],
+                            ref = reference[alignment$index2])
+
+    plt.input <- df.input %>%
+      ggplot() +
+      geom_point(aes(x = t, y = query), color = "black") +
+      geom_point(aes(x = t, y = reference), color = "red") +
+      ggtitle(paste("Input (i=", i, ", j=", j,")",  sep = "")) +
+      xlab("Time (s)") +
+      ylab("Response") +
+      theme_classic()
+
+
+
+    plt.warped <- df.warped %>%
+      ggplot() +
+      geom_point(aes(x = t, y = query), color = "black") +
+      geom_point(aes(x = t, y = ref), color = "red") +
+      xlab("Time (s)") +
+      ylab("Response") +
+      theme_classic() +
+      ggtitle("Output")
+
+    print(cowplot::plot_grid(plt.input, plt.warped, ncol = 2))
+
+
+    df.input %>%
+      ggplot() +
+      geom_line(aes(x = t, y = query), color = "black") +
+      geom_line(aes(x = t, y = q.smooth), color = "red") +
+      ggtitle(paste("Input (i=", i, ", j=", j,")",  sep = "")) +
+      xlab("Time (s)") +
+      ylab("Response") +
+      theme_classic()
+  }
+# }
+
+}
+
+
+
+
+
+
+
+
+```
+
+
+```{r}
+#Block 6
+ts.all <- NULL
+for (i in 1:length(geneSets)){
+  
+  # get current condition
+  cur.condition <- names(geneSets)[i]
+  
+  # get time series
+  ts <-  geneSets[[i]]
+  
+  # smoothm time-series (noise reduction step)
+  ts.smooth <- ts
+  for (j in 2:ncol(ts)){
+    cur.df <- data.frame(t = ts$Time, y = ts[ ,j])
+    colnames(cur.df) <- c("t", "y")
+        loessMod10 <- loess(y ~ t, data=cur.df, span=0.1) # 10% smoothing span
+        #loessMod10 <- loess(y ~ t, data=cur.df, span=0.03) # 5% smoothing span(Anthony's Edit)
+        
+    ts.smooth[ ,j] <- predict(loessMod10) 
+    
+  }
+  
+  ts <- ts.smooth
+  
+  
+  ts <- ts %>% dplyr::select(-c("Time"))
+  
+  # assign names to current timeseries
+  colnames(ts) <- paste(cur.condition,".", seq(1, ncol(ts)), sep = "")
+  
+  if (!is.null(ts.all)){
+    all.n <- nrow(ts.all)
+    cur.n <- nrow(ts)
+    
+    if (cur.n > all.n){
+      
+      ts.na.filler <- ts.all[1:(cur.n-all.n), ]
+      ts.na.filler[1:(cur.n-all.n), ] <- NA
+      
+      ts.all <- bind_rows(ts.all, ts.na.filler)
+    } else  if (cur.n < all.n){
+      ts.na.filler <- ts[1:(all.n-cur.n), ]
+      ts.na.filler[1:(all.n-cur.n), ] <- NA
+      ts <- bind_rows(ts, ts.na.filler)
+    }
+  }
+  
+  ts.all <- bind_cols(ts.all, ts)
+  
+}
+
+ts.all <- ts.all[complete.cases(ts.all), ]
+
+
+```
+
+
+```{r calculate distance matrix}
+#Block 7 
+## Downloading all the extra things I need for WGCNA to work 
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("GO.db")
+# 
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("impute")
+# 
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("preprocessCore")
+## ^ Stuff I added in order to run WGCNA
+
+library(WGCNA)
+
+
+# get signautre matrix
+resp.mat <- t(as.matrix(ts.all))
+resp.norm <- BBmisc::normalize(resp.mat, method="standardize")
+
+
+# calculate distance measures
+distMatrix <- dist(resp.norm, method="DTW")
+
+# labels for each signature
+observedLabels <- colnames(ts.all)
+
+
+```
+
+```{r cluster data}
+
+#Block 8 
+# hierarchial clusters
+hc <- hclust(distMatrix, method="average")
+# hc <- hclust(distMatrix, method="complete")
+
+# hc[["height"]] <- log(hc[["height"]])
+
+# apply dynamic tree cut algorithm
+# modules <- dynamicTreeCut::cutreeDynamicTree(dendro = hc, minModuleSize = 100, maxTreeHeight = 100, deepSplit = T)
+
+modules <- dynamicTreeCut::cutreeDynamic(dendro = hc, distM = distMatrix, deepSplit = 4, pamRespectsDendro = F,
+                        minClusterSize = 30, method = "tree")
+
+# modules <- dynamicTreeCut::cutreeHybrid(dendro = hc, distM = distMatrix)
+
+# assign colors to modules
+module.colours = labels2colors(modules)
+
+# plot dendrogram
+plotDendroAndColors(hc, module.colours, 'Signatures', dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05, main='')
+
+hist(log10(hc[["height"]]))
+
+```
+
+
+```{r}
+#Block 9
+module_colors= setdiff(unique(module.colours), "grey")
+module.list <- list()
+for (i in 1:length(module_colors) ){
+  color <- module_colors[i]
+  module.name <- paste("M", i, ".", color, sep = "")
+  module.list[[module.name]]=observedLabels[which(module.colours==color)]
+}
+
+ table(module.colours)
+
+```
+
+```{r}
+#Block 10 
+# get module concentration scores
+conc.legend <- c(-8, -7, -6, -5, -4, -3, -2)
+names(conc.legend) <- c("e-8", "e-7", "e-6", "e-5", "e-4", "e-3", "e-2")
+
+
+df.modScore <- data.frame(mod = names(module.list), score.mean = NA, score.median = NA, score.sd = NA)
+
+
+for (i in 1:nrow(df.modScore)){
+  a <- unlist(module.list[[i]])
+  
+  all.conc <- c()
+  for (j in 1:length(conc.legend)){
+    
+    cur.conc <- rep(as.vector(conc.legend[j]),  sum(grepl(names(conc.legend)[j], a)) )
+    
+    all.conc <- c(all.conc, cur.conc)
+  }
+  
+  
+  
+  df.modScore$score.mean[i] <- mean(all.conc)
+  df.modScore$score.median[i] <- median(all.conc)
+  df.modScore$score.sd[i] <- sd(all.conc)
+  df.modScore$score.N[i] <- length(all.conc)
+}
+
+df.modScore <- df.modScore %>% arrange(score.mean)
+
+
+```
+
+```{r}
+
+#Block 11 
+df.modConc <- data.frame(module = names(unlist(module.list)), conc.label = as.vector(unlist(module.list)))
+
+df.modConc$module <- as.character(df.modConc$module)
+
+df.modConc$conc <- NA
+
+for (j in 1:length(conc.legend)){
+  df.modConc$conc[grepl(names(conc.legend)[j],  df.modConc$conc.label)] <- as.vector(conc.legend[j])
+}
+
+for (j in 1:length(module.list)){
+  df.modConc$module[grepl(names(module.list)[j],  df.modConc$module)] <- names(module.list)[j]
+}
+
+
+
+
+df.modConc.sum <- df.modConc %>%
+  dplyr::group_by(conc, module) %>%
+  dplyr::tally()
+
+df.modConc.sum <- df.modConc.sum %>%
+  group_by(conc) %>%
+  mutate(freq = n/sum(n))
+
+df.modConc.sum$conc <- factor(df.modConc.sum$conc, levels = c(-8, -7, -6, -5, -4, -3, -2))
+df.modConc.sum$module <- factor(df.modConc.sum$module, levels = as.character(df.modScore$mod))
+
+
+df.modConc.sum$module 
+
+
+df.modConc.sum %>% 
+  ggplot(aes(x = conc, y = freq, fill = module)) + 
+  geom_bar(stat="identity") + ylab("Module Frequency") + xlab("ATP concentration (logM)") + 
+  ggtitle("Dose-Dependent Signature Frequency")
+
+
+df.modConc.sum %>% 
+  ggplot(aes(x = conc, y = freq, fill = module)) + 
+  geom_bar(stat="identity") + 
+  facet_wrap(~module) + 
+  theme_classic()
+
+
+```
+
+
+```{r}
+#Block 12 
+# df.plot <- data.table(melt(data.table(class = as.factor(module.colours),
+#                                         ts.all)))
+# df.plot[, Time := rep(1:ncol(ts.all), each = nrow(ts.all))]
+# df.plot[, ID := rep(1:nrow(ts.all), ncol(ts.all))]
+
+library(reshape2)
+
+ts.plot <- bind_cols(data.frame(time = 0.5*seq(1:nrow(ts.all))), ts.all)
+ts.plot$time <-ts.plot$time - 0.5
+
+ts.plot.long <- data.table::melt(ts.plot, id = "time", variable_name = "signature")
+
+
+ts.plot.long$module <- NA
+for (i in 1:length(module.list)){
+ ts.plot.long$module[ts.plot.long$variable %in% module.list[[i]]] <-  names(module.list)[i]
+}
+
+ ts.plot.long$module[is.na( ts.plot.long$module)] <- "no.module"
+
+
+```
+
+```{r generate figure, fig.width= 10, fig.height=12}
+#Block 13
+# df.modScore <- df.modScore %>% arrange(score.mean)
+
+ts.plot.long <- ts.plot.long[!(is.na(as.character(ts.plot.long$module))), ]
+
+ts.plot.long$module <- factor(ts.plot.long$module, levels = as.character(df.modScore$mod))
+
+ts.plot.long <- ts.plot.long[!(is.na(as.character(ts.plot.long$module))), ]
+
+ts.plot.long$module <- factor(ts.plot.long$module, levels = as.character(df.modScore$mod))
+
+# ts.plot.long.sub <-
+
+# ts.plot.long$module[]
+ 
+plt.sig <- ts.plot.long %>%
+ ggplot(aes(x = time, y = value, group = variable)) +
+  facet_wrap(~module, ncol = 4, scales = "fixed") +
+  geom_line(color = "grey10", alpha = 0.1) +
+  labs(x = "Time", y = "Load (normalised)") +
+  theme_bw()
+
+# plt.sig <- ts.plot.long %>%
+#  ggplot(aes(x = time, y = value, group = variable)) +
+#   facet_wrap(~module, ncol = 4, scales = "free_y") +
+#   geom_line(color = "grey10", alpha = 0.1) +
+#   labs(x = "Time", y = "Load (normalised)") +
+#   theme_bw()
+
+print(plt.sig)
+
+```
+
+
+
+```{r}
+
+#Block 14 
+# library(dtwclust)
+# resp.norm <- BBmisc::normalize(resp.mat, method="standardize")
+# 
+# 
+# resp.norm.sub <- resp.norm[sample(seq(1,nrow(resp.norm)), 100), ]
+# 
+# 
+# cluster.n <- 2L:17L
+# clust.pam <- dtwclust::tsclust(resp.norm.sub, type="partitional", k=cluster.n, distance="dtw", centroid="pam")
+# 
+# # dtwclust::cvi(clust.pam[[1]])
+# res <- lapply(clust.pam,cvi )
+# 
+# 
+# df.res <- NULL
+# for (i in 1:length(res)){
+#   cur.res <- data.frame(Sil = res[[i]][1],
+#              SF = res[[i]][2],
+#              CH = res[[i]][3],
+#              DB = res[[i]][4],
+#              DBstar = res[[i]][5],
+#              D = res[[i]][6])
+#   
+#   df.res <- bind_rows(df.res, cur.res)
+# }
+# 
+# df.res <- bind_cols(data.frame(n.clust = cluster.n), df.res)
+# 
+# plt.sil <- df.res %>% ggplot(aes(x = n.clust, y = Sil)) + geom_point() + ggtitle("Sil")
+# plt.sf <- df.res %>% ggplot(aes(x = n.clust, y = SF)) + geom_point() + ggtitle("SF")
+# plt.ch <- df.res %>% ggplot(aes(x = n.clust, y = CH)) + geom_point() + ggtitle("CH")
+# plt.db <- df.res %>% ggplot(aes(x = n.clust, y = DB)) + geom_point() + ggtitle("DB")
+# plt.dbstar <- df.res %>% ggplot(aes(x = n.clust, y = DBstar)) + geom_point() + ggtitle("DBstar")
+# plt.d <- df.res %>% ggplot(aes(x = n.clust, y = D)) + geom_point() + ggtitle("D")
+# 
+# cowplot::plot_grid(plt.sil, plt.sf, plt.ch, plt.db, plt.dbstar, plt.d, ncol = 3)
+# 
+# clust.pam.v2 <- tsclust(resp.norm.sub, type="partitional", k=8L, distance="dtw", clustering="pam")
+# 
+# 
+# # clust.hier <- dtwclust::tsclust(resp.norm.sub, type = "h", k = 8L, distance = "dtw")
+# # 
+# # 
+# # 
+# plot(clust.pam.v2)
+# 
+# 
+# plot(clust.pam.v2, type="sc")
+# 
+# plot(clust.pam.v2, type = "sc", clus =8)
+
+# table(cutree(clust.hier, k=8L))
+
+
+
+
+```
+
+
+
+```{r}
+#Chunk 15
+# Gonna try to get all the clustering data in one spreadsheet 
+
+#plt.sig[[1]]
+
+#View(plt.sig[["data"]])
+
+#(plt.sig[["data"]])[,3]
+
+#install.packages("xlsx")
+library(openxlsx)
+
+arrange(plt.sig[["data"]], module)
+
+openxlsx::write.xlsx(arrange(plt.sig[["data"]], module), "/Users/anthonyquint/Desktop/blah.xlsx", sheetName = "Data",col.names = TRUE, row.names = TRUE, append = FALSE)
+
+
+#openxlsx::write.xlsx(plt.sig[["data"]], "/Users/anthonyquint/Desktop/Clusters_in_Excel.xlsx", sheetName = "Data",col.names = TRUE, row.names = TRUE, append = FALSE)
+
+
+# "/Users/anthonyquint/Desktop/Clusters_in_Excel.xlsx"
+
+
+
+
